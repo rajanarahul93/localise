@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { motion } from "framer-motion";
-import { Send, Type, Tag } from "lucide-react";
+import { Send, Type, Tag, Upload, X } from "lucide-react";
 import { FormInput } from "./ui/FormInput";
 import { FormTextarea } from "./ui/FormTextarea";
 import { FormSelect } from "./ui/FormSelect";
@@ -27,6 +27,11 @@ interface FormErrors {
   category?: string;
 }
 
+interface FilePreview {
+  file: File;
+  preview: string;
+}
+
 const categoryOptions = [
   { value: "events", label: "Events", emoji: "🎉" },
   { value: "for-sale", label: "For Sale", emoji: "💰" },
@@ -46,6 +51,32 @@ export function CreatePostForm({
   });
   const [errors, setErrors] = useState<FormErrors>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [files, setFiles] = useState<FilePreview[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFiles = e.target.files;
+    if (!selectedFiles) return;
+
+    const newFiles: FilePreview[] = [];
+    for (let i = 0; i < selectedFiles.length; i++) {
+      const file = selectedFiles[i];
+      const preview = URL.createObjectURL(file);
+      newFiles.push({ file, preview });
+    }
+
+    setFiles((prev) => [...prev, ...newFiles]);
+    e.target.value = "";
+  };
+
+  const removeFile = (index: number) => {
+    setFiles((prev) => {
+      const updated = [...prev];
+      URL.revokeObjectURL(updated[index].preview);
+      updated.splice(index, 1);
+      return updated;
+    });
+  };
 
   const validateForm = (): boolean => {
     const newErrors: FormErrors = {};
@@ -82,13 +113,17 @@ export function CreatePostForm({
     setIsSubmitting(true);
 
     try {
-      await createPost({
-        title: formData.title.trim(),
-        description: formData.description.trim(),
-        category: formData.category as any,
-        lat: userLocation.lat,
-        lng: userLocation.lng,
-      });
+      const fileObjects = files.map((f) => f.file);
+      await createPost(
+        {
+          title: formData.title.trim(),
+          description: formData.description.trim(),
+          category: formData.category as any,
+          lat: userLocation.lat,
+          lng: userLocation.lng,
+        },
+        fileObjects.length > 0 ? fileObjects : undefined
+      );
 
       toast.success("Post created successfully!", {
         icon: "🎉",
@@ -162,6 +197,67 @@ export function CreatePostForm({
           <Tag className="w-4 h-4 mr-1" />
           Anonymous post
         </span>
+      </div>
+
+      {/* File Upload Section */}
+      <div className="space-y-3">
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+          Attachments (optional)
+        </label>
+
+        <div className="flex gap-3 items-stretch overflow-x-auto pb-2">
+          {/* Upload Button */}
+          <div
+            onClick={() => fileInputRef.current?.click()}
+            className="flex-shrink-0 w-28 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-3 cursor-pointer hover:border-gray-400 dark:hover:border-gray-500 transition-colors flex flex-col items-center justify-center"
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              onChange={handleFileSelect}
+              disabled={isSubmitting}
+              className="hidden"
+              accept="image/*,.pdf,.doc,.docx"
+            />
+            <Upload className="w-5 h-5 text-gray-400 mb-1" />
+            <p className="text-xs text-gray-600 dark:text-gray-400 text-center">
+              Upload file
+            </p>
+          </div>
+
+          {/* File Previews - Horizontal Scroll */}
+          {files.map((item, index) => (
+            <div
+              key={index}
+              className="relative group flex-shrink-0 rounded-lg overflow-hidden bg-gray-100 dark:bg-gray-800 w-28 h-28"
+            >
+              {item.file.type.startsWith("image/") ? (
+                <img
+                  src={item.preview}
+                  alt={item.file.name}
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center bg-gray-200 dark:bg-gray-700 p-1">
+                  <span className="text-xs text-gray-600 dark:text-gray-400 text-center line-clamp-2">
+                    {item.file.name}
+                  </span>
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => removeFile(index)}
+                className="absolute top-1 right-1 bg-red-500 rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity shadow-lg"
+              >
+                <X className="w-3 h-3 text-white" />
+              </button>
+            </div>
+          ))}
+        </div>
+        <p className="text-xs text-gray-500 dark:text-gray-500">
+          Images, PDF, DOC up to 10MB
+        </p>
       </div>
 
       {/* Privacy Notice */}
