@@ -54,10 +54,10 @@ export function Modal({ isOpen, onClose, title, children }: ModalProps) {
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 20 }}
             transition={{ type: "spring", stiffness: 300, damping: 30 }}
-            className="relative bg-white dark:bg-gray-900 rounded-t-3xl sm:rounded-3xl w-full max-w-lg mx-4 max-h-[90vh] overflow-hidden shadow-2xl"
+            className="relative bg-white dark:bg-gray-900 rounded-t-3xl sm:rounded-3xl w-full max-w-lg mx-4 max-h-[90vh] flex flex-col shadow-2xl"
           >
             {/* Header */}
-            <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
+            <div className="flex-shrink-0 flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
               <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
                 {title}
               </h2>
@@ -70,7 +70,7 @@ export function Modal({ isOpen, onClose, title, children }: ModalProps) {
             </div>
 
             {/* Content */}
-            <div className="p-6 overflow-y-auto">{children}</div>
+            <div className="flex-1 overflow-y-auto p-6">{children}</div>
           </motion.div>
         </div>
       )}

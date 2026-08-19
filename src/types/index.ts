@@ -6,7 +6,8 @@ export interface Post {
   lat: number;
   lng: number;
   created_at: string;
-  user_id: string; // Add this field
+  user_id: string;
+  attachments?: string[];
 }
 
 export interface Comment {

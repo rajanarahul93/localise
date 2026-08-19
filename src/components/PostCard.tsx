@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { Clock, MapPin, MessageCircle, Trash2 } from "lucide-react";
+import { Clock, MapPin, MessageCircle, Trash2, FileText } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { Modal } from "./ui/Modal";
 import { CommentsList } from "./CommentsList";
+import { supabase } from "../lib/supabase";
 import type { Post } from "../types";
 
 interface PostCardProps {
@@ -57,6 +58,23 @@ export function PostCard({ post, distance, onDelete }: PostCardProps) {
     }
   };
 
+  const getAttachmentUrl = (path: string) => {
+    const { data } = supabase.storage
+      .from("post-attachments")
+      .getPublicUrl(path);
+    console.log("Attachment path:", path, "Public URL:", data.publicUrl);
+    return data.publicUrl;
+  };
+
+  const isImageFile = (path: string) => {
+    const imageExts = [".jpg", ".jpeg", ".png", ".gif", ".webp"];
+    return imageExts.some((ext) => path.toLowerCase().endsWith(ext));
+  };
+
+  if (post.attachments && post.attachments.length > 0) {
+    console.log("Post has attachments:", post.attachments);
+  }
+
   return (
     <>
       <motion.div
@@ -101,6 +119,43 @@ export function PostCard({ post, distance, onDelete }: PostCardProps) {
         <p className="text-gray-600 dark:text-gray-300 mb-4 leading-relaxed">
           {post.description}
         </p>
+
+        {/* Attachments */}
+        {post.attachments && post.attachments.length > 0 && (
+          <div className="mb-4 space-y-2">
+            <div className="grid gap-2" style={{ gridTemplateColumns: post.attachments.length === 1 ? '1fr' : 'repeat(auto-fill, minmax(150px, 1fr))' }}>
+              {post.attachments.map((path, index) => {
+                const url = getAttachmentUrl(path);
+                const isImage = isImageFile(path);
+
+                return (
+                  <a
+                    key={index}
+                    href={url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="group relative rounded-lg overflow-hidden bg-gray-100 dark:bg-gray-800 hover:opacity-80 transition-opacity"
+                  >
+                    {isImage ? (
+                      <img
+                        src={url}
+                        alt={`Attachment ${index + 1}`}
+                        className="w-full h-auto object-contain max-h-96"
+                      />
+                    ) : (
+                      <div className="w-full h-40 flex items-center justify-center gap-2 bg-gray-200 dark:bg-gray-700">
+                        <FileText className="w-5 h-5 text-gray-400" />
+                        <span className="text-xs text-gray-600 dark:text-gray-400">
+                          View file
+                        </span>
+                      </div>
+                    )}
+                  </a>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         <div className="flex items-center justify-between">
           {distance !== undefined && (
