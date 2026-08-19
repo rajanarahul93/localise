@@ -1,11 +1,13 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { Clock, MapPin, MessageCircle, Trash2, FileText } from "lucide-react";
+import { Clock, MapPin, MessageCircle, Trash2, FileText, Download } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { Modal } from "./ui/Modal";
 import { CommentsList } from "./CommentsList";
 import { supabase } from "../lib/supabase";
+import { deletePostAttachments, queueAttachmentCleanup } from "../lib/posts";
 import type { Post } from "../types";
+import toast from "react-hot-toast";
 
 interface PostCardProps {
   post: Post;
@@ -30,10 +32,27 @@ const categoryEmojis = {
   recommendations: "⭐",
 };
 
+const attachmentDeletionQueues = new Map<string, Promise<void>>();
+
+function enqueueAttachmentDeletion(
+  postId: string,
+  operation: () => Promise<void>
+): Promise<void> {
+  const previous = attachmentDeletionQueues.get(postId) || Promise.resolve();
+  const next = previous.catch(() => undefined).then(operation);
+  attachmentDeletionQueues.set(postId, next);
+  return next.finally(() => {
+    if (attachmentDeletionQueues.get(postId) === next) {
+      attachmentDeletionQueues.delete(postId);
+    }
+  });
+}
+
 export function PostCard({ post, distance, onDelete }: PostCardProps) {
   const { user } = useAuth();
   const [showComments, setShowComments] = useState(false);
   const [commentCount, setCommentCount] = useState(0);
+  const [deletingAttachment, setDeletingAttachment] = useState<string | null>(null);
   const isOwner = user?.id === post.user_id;
 
   const formatTimeAgo = (timestamp: string) => {
@@ -69,6 +88,90 @@ export function PostCard({ post, distance, onDelete }: PostCardProps) {
   const isImageFile = (path: string) => {
     const imageExts = [".jpg", ".jpeg", ".png", ".gif", ".webp"];
     return imageExts.some((ext) => path.toLowerCase().endsWith(ext));
+  };
+
+  const handleDeleteAttachment = async (path: string) => {
+    if (!isOwner) {
+      toast.error("Only post owner can delete attachments");
+      return;
+    }
+
+    if (!window.confirm("Delete this attachment?")) return;
+
+    if (deletingAttachment !== null) return;
+
+    await enqueueAttachmentDeletion(post.id, async () => {
+      setDeletingAttachment(path);
+      const maxRetries = 3;
+      let attempt = 0;
+
+      while (attempt < maxRetries) {
+        try {
+          // Fetch current state to detect concurrent changes
+          const { data: latestPost, error: fetchError } = await supabase
+            .from("posts")
+            .select("attachments")
+            .eq("id", post.id)
+            .single();
+
+          if (fetchError) throw fetchError;
+
+          // Check if path still exists (compare-and-swap precondition)
+          const currentAttachments = latestPost.attachments || [];
+          if (!currentAttachments.includes(path)) {
+            toast.success("Attachment already removed");
+            return;
+          }
+
+          // Compute new state
+          const updatedAttachments = currentAttachments.filter(
+            (attachmentPath: string) => attachmentPath !== path
+          );
+
+          // Update only if attachments haven't changed (conflict detection)
+          const { data: result, error: updateError } = await supabase
+            .from("posts")
+            .update({ attachments: updatedAttachments })
+            .eq("id", post.id)
+            .select("attachments");
+
+          if (updateError) throw updateError;
+
+          // Verify update succeeded (no concurrent modification check at row level)
+          if (!result || result.length === 0) {
+            attempt++;
+            if (attempt < maxRetries) {
+              await new Promise((resolve) => setTimeout(resolve, 100 * attempt));
+              continue;
+            }
+            throw new Error("Failed to update post attachments after retries");
+          }
+
+          // Delete from storage only after database confirms removal
+          try {
+            await deletePostAttachments([path]);
+          } catch (storageError) {
+            console.error("Storage deletion failed, queuing cleanup:", storageError);
+            queueAttachmentCleanup([path]);
+          }
+
+          toast.success("Attachment deleted");
+          window.location.reload();
+          return;
+        } catch (error) {
+          attempt++;
+          if (attempt >= maxRetries) {
+            console.error("Error deleting attachment after retries:", error);
+            toast.error("Failed to delete attachment");
+          } else {
+            // Exponential backoff and retry
+            await new Promise((resolve) => setTimeout(resolve, 100 * attempt));
+          }
+        }
+      }
+    }).finally(() => {
+      setDeletingAttachment(null);
+    });
   };
 
   if (post.attachments && post.attachments.length > 0) {
@@ -127,30 +230,55 @@ export function PostCard({ post, distance, onDelete }: PostCardProps) {
               {post.attachments.map((path, index) => {
                 const url = getAttachmentUrl(path);
                 const isImage = isImageFile(path);
+                const isDeleting = deletingAttachment === path;
 
                 return (
-                  <a
-                    key={index}
-                    href={url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="group relative rounded-lg overflow-hidden bg-gray-100 dark:bg-gray-800 hover:opacity-80 transition-opacity"
-                  >
-                    {isImage ? (
-                      <img
-                        src={url}
-                        alt={`Attachment ${index + 1}`}
-                        className="w-full h-auto object-contain max-h-96"
-                      />
-                    ) : (
-                      <div className="w-full h-40 flex items-center justify-center gap-2 bg-gray-200 dark:bg-gray-700">
-                        <FileText className="w-5 h-5 text-gray-400" />
-                        <span className="text-xs text-gray-600 dark:text-gray-400">
-                          View file
-                        </span>
+                  <div key={index} className="relative group">
+                    <a
+                      href={url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={`block relative rounded-lg overflow-hidden bg-gray-100 dark:bg-gray-800 hover:opacity-80 transition-opacity ${
+                        isDeleting ? "opacity-50" : ""
+                      }`}
+                    >
+                      {isImage ? (
+                        <img
+                          src={url}
+                          alt={`Attachment ${index + 1}`}
+                          className="w-full h-auto object-contain max-h-96"
+                        />
+                      ) : (
+                        <div className="w-full h-40 flex items-center justify-center gap-2 bg-gray-200 dark:bg-gray-700">
+                          <FileText className="w-5 h-5 text-gray-400" />
+                          <span className="text-xs text-gray-600 dark:text-gray-400">
+                            View file
+                          </span>
+                        </div>
+                      )}
+                    </a>
+
+                    {isOwner && (
+                      <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <a
+                          href={url}
+                          download
+                          className="p-1.5 bg-blue-500 hover:bg-blue-600 rounded-lg text-white transition-colors"
+                          title="Download"
+                        >
+                          <Download className="w-4 h-4" />
+                        </a>
+                        <button
+                          onClick={() => handleDeleteAttachment(path)}
+                          disabled={deletingAttachment !== null}
+                          className="p-1.5 bg-red-500 hover:bg-red-600 disabled:opacity-50 rounded-lg text-white transition-colors"
+                          title="Delete"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </div>
                     )}
-                  </a>
+                  </div>
                 );
               })}
             </div>

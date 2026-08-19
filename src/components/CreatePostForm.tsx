@@ -6,7 +6,7 @@ import { FormTextarea } from "./ui/FormTextarea";
 import { FormSelect } from "./ui/FormSelect";
 import { LoadingSpinner } from "./ui/LoadingSpinner";
 import { createPost } from "../lib/posts";
-import type { Location } from "../types";
+import type { Location, Post } from "../types";
 import toast from "react-hot-toast";
 
 interface CreatePostFormProps {
@@ -28,9 +28,31 @@ interface FormErrors {
 }
 
 interface FilePreview {
+  id: string;
   file: File;
   preview: string;
 }
+
+interface FileUploadProgress {
+  [key: string]: number;
+}
+
+interface RejectedFile {
+  id: string;
+  name: string;
+  error: string;
+}
+
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+const ALLOWED_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+];
 
 const categoryOptions = [
   { value: "events", label: "Events", emoji: "🎉" },
@@ -52,28 +74,62 @@ export function CreatePostForm({
   const [errors, setErrors] = useState<FormErrors>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [files, setFiles] = useState<FilePreview[]>([]);
+  const [rejectedFiles, setRejectedFiles] = useState<RejectedFile[]>([]);
+  const [uploadProgress, setUploadProgress] = useState<FileUploadProgress>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const validateFile = (file: File): string | null => {
+    if (!ALLOWED_TYPES.includes(file.type)) {
+      return "File type not supported. Allowed: images, PDF, DOC";
+    }
+    if (file.size > MAX_FILE_SIZE) {
+      return `File size exceeds 10MB limit (${(file.size / 1024 / 1024).toFixed(1)}MB)`;
+    }
+    return null;
+  };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = e.target.files;
     if (!selectedFiles) return;
 
     const newFiles: FilePreview[] = [];
+    const newRejectedFiles: RejectedFile[] = [];
+
     for (let i = 0; i < selectedFiles.length; i++) {
       const file = selectedFiles[i];
-      const preview = URL.createObjectURL(file);
-      newFiles.push({ file, preview });
+      const id = crypto.randomUUID();
+      const error = validateFile(file);
+
+      if (error) {
+        newRejectedFiles.push({ id, name: file.name, error });
+        toast.error(`${file.name}: ${error}`, { duration: 4000 });
+      } else {
+        const preview = URL.createObjectURL(file);
+        newFiles.push({ id, file, preview });
+      }
     }
 
-    setFiles((prev) => [...prev, ...newFiles]);
+    if (newRejectedFiles.length > 0) {
+      setRejectedFiles((prev) => [...prev, ...newRejectedFiles]);
+    }
+
+    if (newFiles.length > 0) {
+      setFiles((prev) => [...prev, ...newFiles]);
+      toast.success(`Added ${newFiles.length} file(s)`, { duration: 2000 });
+    }
+
     e.target.value = "";
   };
 
-  const removeFile = (index: number) => {
+  const removeFile = (id: string) => {
     setFiles((prev) => {
-      const updated = [...prev];
-      URL.revokeObjectURL(updated[index].preview);
-      updated.splice(index, 1);
+      const file = prev.find((item) => item.id === id);
+      if (file) URL.revokeObjectURL(file.preview);
+      return prev.filter((item) => item.id !== id);
+    });
+    setUploadProgress((prev) => {
+      const updated = { ...prev };
+      delete updated[id];
       return updated;
     });
   };
@@ -111,6 +167,7 @@ export function CreatePostForm({
     if (!validateForm()) return;
 
     setIsSubmitting(true);
+    const uploadToastId = toast.loading("Creating post with attachments...");
 
     try {
       const fileObjects = files.map((f) => f.file);
@@ -118,22 +175,39 @@ export function CreatePostForm({
         {
           title: formData.title.trim(),
           description: formData.description.trim(),
-          category: formData.category as any,
+          category: formData.category as Post["category"],
           lat: userLocation.lat,
           lng: userLocation.lng,
         },
-        fileObjects.length > 0 ? fileObjects : undefined
+        fileObjects.length > 0 ? fileObjects : undefined,
+        (progress) => {
+          const progressById = Object.fromEntries(
+            Object.entries(progress).flatMap(([index, value]) => {
+              const file = files[Number(index)];
+              return file ? [[file.id, value]] : [];
+            })
+          );
+          setUploadProgress(progressById);
+          const totalProgress = Object.values(progressById).reduce((a, b) => a + b, 0) / fileObjects.length || 0;
+          if (fileObjects.length > 0) {
+            toast.loading(`Uploading files... ${Math.round(totalProgress)}%`, {
+              id: uploadToastId,
+            });
+          }
+        }
       );
 
       toast.success("Post created successfully!", {
         icon: "🎉",
         duration: 3000,
+        id: uploadToastId,
       });
 
       onSuccess();
     } catch (error) {
       console.error("Error creating post:", error);
-      toast.error("Failed to create post. Please try again.");
+      const errorMessage = error instanceof Error ? error.message : "Failed to create post. Please try again.";
+      toast.error(errorMessage, { id: uploadToastId });
     } finally {
       setIsSubmitting(false);
     }
@@ -227,36 +301,73 @@ export function CreatePostForm({
           </div>
 
           {/* File Previews - Horizontal Scroll */}
-          {files.map((item, index) => (
-            <div
-              key={index}
-              className="relative group flex-shrink-0 rounded-lg overflow-hidden bg-gray-100 dark:bg-gray-800 w-28 h-28"
-            >
-              {item.file.type.startsWith("image/") ? (
-                <img
-                  src={item.preview}
-                  alt={item.file.name}
-                  className="w-full h-full object-cover"
-                />
-              ) : (
-                <div className="w-full h-full flex items-center justify-center bg-gray-200 dark:bg-gray-700 p-1">
-                  <span className="text-xs text-gray-600 dark:text-gray-400 text-center line-clamp-2">
-                    {item.file.name}
-                  </span>
-                </div>
-              )}
-              <button
-                type="button"
-                onClick={() => removeFile(index)}
-                className="absolute top-1 right-1 bg-red-500 rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity shadow-lg"
+          {files.map((item) => (
+            <div key={item.id} className="flex-shrink-0 relative">
+              <div
+                className={`relative group rounded-lg overflow-hidden w-28 h-28 flex items-center justify-center ${
+                  isSubmitting
+                    ? "bg-gray-100 dark:bg-gray-800 opacity-50"
+                    : "bg-gray-100 dark:bg-gray-800"
+                }`}
               >
-                <X className="w-3 h-3 text-white" />
-              </button>
+                {item.file.type.startsWith("image/") ? (
+                  <img
+                    src={item.preview}
+                    alt={item.file.name}
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center bg-gray-200 dark:bg-gray-700 p-1">
+                    <span className="text-xs text-gray-600 dark:text-gray-400 text-center line-clamp-2">
+                      {item.file.name}
+                    </span>
+                  </div>
+                )}
+
+                {isSubmitting && uploadProgress[item.id] !== undefined && (
+                  <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                    <div className="text-center">
+                      <div className="text-xs font-semibold text-white">
+                        {uploadProgress[item.id]}%
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {!isSubmitting && (
+                  <button
+                    type="button"
+                    onClick={() => removeFile(item.id)}
+                    disabled={isSubmitting}
+                    className="absolute top-1 right-1 bg-red-500 rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity shadow-lg hover:bg-red-600"
+                  >
+                    <X className="w-3 h-3 text-white" />
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+          {rejectedFiles.map((item) => (
+            <div key={item.id} className="flex-shrink-0 relative w-28">
+              <div className="w-28 h-28 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 p-2 flex items-center justify-center">
+                <span className="text-xs text-red-600 dark:text-red-400 text-center line-clamp-3">
+                  {item.name}
+                </span>
+              </div>
+              <div className="absolute top-full mt-1 left-0 right-0 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded px-2 py-1 text-xs text-red-600 dark:text-red-400">
+                {item.error}
+              </div>
             </div>
           ))}
         </div>
+        {files.length > 0 && (
+          <div className="text-xs text-gray-500 dark:text-gray-400">
+            {files.length} file{files.length !== 1 ? "s" : ""} selected (
+            {(files.reduce((sum, f) => sum + f.file.size, 0) / 1024 / 1024).toFixed(1)}MB)
+          </div>
+        )}
         <p className="text-xs text-gray-500 dark:text-gray-500">
-          Images, PDF, DOC up to 10MB
+          Images (JPG, PNG, GIF, WebP), PDF, DOC files up to 10MB each
         </p>
       </div>
 
