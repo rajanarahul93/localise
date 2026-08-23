@@ -54,10 +54,10 @@ export function CommentsList({
     }
   };
 
-  const handleAddComment = async (content: string) => {
+  const handleAddComment = async (content: string, files?: File[]) => {
     try {
       setSubmitting(true);
-      await addComment(postId, content);
+      await addComment(postId, content, files);
       toast.success("Comment added!");
     } catch (error) {
       console.error("Failed to add comment:", error);
