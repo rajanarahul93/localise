@@ -1,10 +1,15 @@
 import { supabase } from "./supabase";
 import type { Post } from "../types";
 
-export async function fetchPosts(): Promise<Post[]> {
-  const { data, error } = await supabase
-    .from("posts")
-    .select("*")
+export async function fetchPosts(includeArchived = false): Promise<Post[]> {
+  let query = supabase.from("posts").select("*");
+
+  if (!includeArchived) {
+    query = query.eq("is_archived", false);
+  }
+
+  const { data, error } = await query
+    .order("last_bumped_at", { ascending: false, nullsFirst: false })
     .order("created_at", { ascending: false });
 
   if (error) {
@@ -12,7 +17,14 @@ export async function fetchPosts(): Promise<Post[]> {
     throw error;
   }
 
-  return data || [];
+  // Filter out expired posts client-side (but keep archived posts if requested)
+  const now = new Date();
+  return (data || []).filter(post => {
+    if (post.is_archived) {
+      return includeArchived;
+    }
+    return new Date(post.expires_at) > now;
+  });
 }
 
 async function uploadAttachment(
@@ -158,7 +170,7 @@ async function cleanupNewPost(postId: string, attachmentPaths: string[]) {
 }
 
 export async function createPost(
-  post: Omit<Post, "id" | "created_at" | "user_id">,
+  post: Omit<Post, "id" | "created_at" | "user_id" | "expires_at" | "is_archived" | "bump_count" | "last_bumped_at">,
   files?: File[],
   onUploadProgress?: (progress: { [key: number]: number }) => void
 ): Promise<Post> {
@@ -175,6 +187,8 @@ export async function createPost(
         ...post,
         user_id: user?.id,
         attachments: [],
+        is_archived: false,
+        bump_count: 0,
       },
     ])
     .select()
@@ -250,6 +264,28 @@ export function subscribeToNewPosts(callback: (post: Post) => void) {
   };
 }
 
+export async function updatePost(
+  postId: string,
+  updates: {
+    title?: string;
+    description?: string;
+  }
+): Promise<Post> {
+  const { data, error } = await supabase
+    .from("posts")
+    .update(updates)
+    .eq("id", postId)
+    .select()
+    .single();
+
+  if (error) {
+    console.error("Error updating post:", error);
+    throw error;
+  }
+
+  return data;
+}
+
 export async function deletePost(postId: string): Promise<void> {
   try {
     // Fetch post to get attachment paths
@@ -281,6 +317,67 @@ export async function deletePost(postId: string): Promise<void> {
     }
   } catch (error) {
     console.error("Error in deletePost:", error);
+    throw error;
+  }
+}
+
+export async function bumpPost(postId: string): Promise<Post> {
+  const now = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
+  // Fetch current post to get bump_count
+  const { data: currentPost, error: fetchError } = await supabase
+    .from("posts")
+    .select("bump_count")
+    .eq("id", postId)
+    .single();
+
+  if (fetchError) {
+    console.error("Error fetching post for bump:", fetchError);
+    throw fetchError;
+  }
+
+  const newBumpCount = (currentPost?.bump_count || 0) + 1;
+
+  const { data, error } = await supabase
+    .from("posts")
+    .update({
+      last_bumped_at: now,
+      bump_count: newBumpCount,
+      expires_at: expiresAt,
+    })
+    .eq("id", postId)
+    .select()
+    .single();
+
+  if (error) {
+    console.error("Error bumping post:", error);
+    throw error;
+  }
+
+  return data;
+}
+
+export async function archivePost(postId: string): Promise<void> {
+  const { error } = await supabase
+    .from("posts")
+    .update({ is_archived: true })
+    .eq("id", postId);
+
+  if (error) {
+    console.error("Error archiving post:", error);
+    throw error;
+  }
+}
+
+export async function unarchivePost(postId: string): Promise<void> {
+  const { error } = await supabase
+    .from("posts")
+    .update({ is_archived: false })
+    .eq("id", postId);
+
+  if (error) {
+    console.error("Error unarchiving post:", error);
     throw error;
   }
 }

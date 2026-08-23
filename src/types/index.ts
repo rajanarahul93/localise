@@ -6,8 +6,13 @@ export interface Post {
   lat: number;
   lng: number;
   created_at: string;
+  updated_at?: string;
   user_id: string;
   attachments?: string[];
+  expires_at: string;
+  is_archived: boolean;
+  bump_count: number;
+  last_bumped_at?: string;
 }
 
 export interface Comment {
@@ -16,6 +21,8 @@ export interface Comment {
   user_id: string;
   content: string;
   created_at: string;
+  updated_at?: string;
+  attachments?: string[];
 }
 
 export interface Location {

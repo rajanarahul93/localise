@@ -1,6 +1,7 @@
 import { motion } from "framer-motion";
-import { Clock, Trash2 } from "lucide-react";
+import { Clock, Trash2, FileText } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
+import { supabase } from "../lib/supabase";
 import type { Comment } from "../types";
 
 interface CommentItemProps {
@@ -25,6 +26,18 @@ export function CommentItem({ comment, onDelete }: CommentItemProps) {
     return `${Math.floor(diffInMinutes / 1440)}d ago`;
   };
 
+  const getAttachmentUrl = (path: string) => {
+    const { data } = supabase.storage
+      .from("comment-attachments")
+      .getPublicUrl(path);
+    return data.publicUrl;
+  };
+
+  const isImageFile = (path: string) => {
+    const imageExts = [".jpg", ".jpeg", ".png", ".gif", ".webp"];
+    return imageExts.some((ext) => path.toLowerCase().endsWith(ext));
+  };
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 10 }}
@@ -32,8 +45,8 @@ export function CommentItem({ comment, onDelete }: CommentItemProps) {
       className="bg-gray-50 dark:bg-gray-800 rounded-xl p-4"
     >
       <div className="flex items-start justify-between mb-2">
-        <div className="flex items-center text-sm text-gray-500 dark:text-gray-400">
-          <div className="w-8 h-8 bg-primary-500 rounded-full flex items-center justify-center mr-3">
+        <div className="flex items-center text-sm text-gray-500 dark:text-gray-400 gap-2">
+          <div className="w-8 h-8 bg-primary-500 rounded-full flex items-center justify-center">
             <span className="text-white font-medium text-sm">
               {comment.user_id.slice(0, 2).toUpperCase()}
             </span>
@@ -42,6 +55,9 @@ export function CommentItem({ comment, onDelete }: CommentItemProps) {
             <Clock className="w-3 h-3 mr-1" />
             {formatTimeAgo(comment.created_at)}
           </div>
+          {comment.updated_at && comment.updated_at !== comment.created_at && (
+            <span className="text-xs italic text-gray-400">edited</span>
+          )}
         </div>
 
         {isOwner && (
@@ -56,9 +72,41 @@ export function CommentItem({ comment, onDelete }: CommentItemProps) {
         )}
       </div>
 
-      <p className="text-gray-700 dark:text-gray-300 text-sm leading-relaxed">
+      <p className="text-gray-700 dark:text-gray-300 text-sm leading-relaxed mb-3">
         {comment.content}
       </p>
+
+      {/* Attachments */}
+      {comment.attachments && comment.attachments.length > 0 && (
+        <div className="flex gap-2 overflow-x-auto pb-2">
+          {comment.attachments.map((path, index) => {
+            const url = getAttachmentUrl(path);
+            const isImage = isImageFile(path);
+
+            return (
+              <a
+                key={index}
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex-shrink-0 rounded-lg overflow-hidden hover:opacity-80 transition-opacity"
+              >
+                {isImage ? (
+                  <img
+                    src={url}
+                    alt={`Attachment ${index + 1}`}
+                    className="h-24 w-24 object-cover"
+                  />
+                ) : (
+                  <div className="h-24 w-24 flex items-center justify-center bg-gray-200 dark:bg-gray-700 rounded-lg">
+                    <FileText className="w-5 h-5 text-gray-400" />
+                  </div>
+                )}
+              </a>
+            );
+          })}
+        </div>
+      )}
     </motion.div>
   );
 }

@@ -1,11 +1,12 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { Clock, MapPin, MessageCircle, Trash2, FileText, Download } from "lucide-react";
+import { Clock, MapPin, MessageCircle, Trash2, FileText, Download, Edit2, RotateCcw, Archive } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { Modal } from "./ui/Modal";
 import { CommentsList } from "./CommentsList";
+import { EditPostModal } from "./EditPostModal";
 import { supabase } from "../lib/supabase";
-import { deletePostAttachments, queueAttachmentCleanup } from "../lib/posts";
+import { deletePostAttachments, queueAttachmentCleanup, updatePost, bumpPost, archivePost, unarchivePost } from "../lib/posts";
 import type { Post } from "../types";
 import toast from "react-hot-toast";
 
@@ -13,6 +14,8 @@ interface PostCardProps {
   post: Post;
   distance?: number;
   onDelete?: (postId: string) => void;
+  onArchiveChange?: () => Promise<void>;
+  isArchived?: boolean;
 }
 
 const categoryColors = {
@@ -48,12 +51,27 @@ function enqueueAttachmentDeletion(
   });
 }
 
-export function PostCard({ post, distance, onDelete }: PostCardProps) {
+export function PostCard({ post: initialPost, distance, onDelete, onArchiveChange, isArchived = false }: PostCardProps) {
   const { user } = useAuth();
+  const [post, setPost] = useState(initialPost);
   const [showComments, setShowComments] = useState(false);
   const [commentCount, setCommentCount] = useState(0);
   const [deletingAttachment, setDeletingAttachment] = useState<string | null>(null);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [isBumping, setIsBumping] = useState(false);
+  const [isArchiving, setIsArchiving] = useState(false);
   const isOwner = user?.id === post.user_id;
+
+  const handleEditPost = async (updates: { title: string; description: string }) => {
+    try {
+      const updatedPost = await updatePost(post.id, updates);
+      setPost(updatedPost);
+      toast.success("Post updated!");
+    } catch (error) {
+      console.error("Error updating post:", error);
+      throw error;
+    }
+  };
 
   const formatTimeAgo = (timestamp: string) => {
     const now = new Date();
@@ -66,6 +84,65 @@ export function PostCard({ post, distance, onDelete }: PostCardProps) {
     if (diffInMinutes < 60) return `${diffInMinutes}m ago`;
     if (diffInMinutes < 1440) return `${Math.floor(diffInMinutes / 60)}h ago`;
     return `${Math.floor(diffInMinutes / 1440)}d ago`;
+  };
+
+  const getTimeUntilExpiration = () => {
+    const now = new Date();
+    const expiresAt = new Date(post.expires_at);
+    const diffInMinutes = Math.floor(
+      (expiresAt.getTime() - now.getTime()) / (1000 * 60)
+    );
+
+    if (diffInMinutes < 0) return null;
+    if (diffInMinutes < 60) return `${diffInMinutes}m left`;
+    if (diffInMinutes < 1440) return `${Math.floor(diffInMinutes / 60)}h left`;
+    return `${Math.floor(diffInMinutes / 1440)}d left`;
+  };
+
+  const handleBump = async () => {
+    setIsBumping(true);
+    try {
+      const updatedPost = await bumpPost(post.id);
+      setPost(updatedPost);
+      toast.success(`Post refreshed! (${updatedPost.bump_count} bumps)`);
+    } catch (error) {
+      console.error("Error bumping post:", error);
+      toast.error("Failed to refresh post");
+    } finally {
+      setIsBumping(false);
+    }
+  };
+
+  const handleArchive = async () => {
+    setIsArchiving(true);
+    try {
+      await archivePost(post.id);
+      toast.success("Post archived");
+      if (onArchiveChange) {
+        await onArchiveChange();
+      }
+    } catch (error) {
+      console.error("Error archiving post:", error);
+      toast.error("Failed to archive post");
+    } finally {
+      setIsArchiving(false);
+    }
+  };
+
+  const handleUnarchive = async () => {
+    setIsArchiving(true);
+    try {
+      await unarchivePost(post.id);
+      toast.success("Post restored to feed");
+      if (onArchiveChange) {
+        await onArchiveChange();
+      }
+    } catch (error) {
+      console.error("Error unarchiving post:", error);
+      toast.error("Failed to restore post");
+    } finally {
+      setIsArchiving(false);
+    }
   };
 
   const handleDelete = () => {
@@ -196,21 +273,99 @@ export function PostCard({ post, distance, onDelete }: PostCardProps) {
             {post.category.replace("-", " ")}
           </span>
 
-          <div className="flex items-center gap-2">
-            <div className="flex items-center text-gray-500 dark:text-gray-400 text-sm">
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center text-gray-600 dark:text-gray-300 text-sm font-medium">
               <Clock className="w-4 h-4 mr-1" />
-              {formatTimeAgo(post.created_at)}
+              {post.last_bumped_at ? (
+                <>
+                  <span className="text-amber-600 dark:text-amber-400">Refreshed</span>
+                  <span className="mx-1">{formatTimeAgo(post.last_bumped_at)}</span>
+                  <span className="ml-1 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400">
+                    {post.bump_count}x
+                  </span>
+                </>
+              ) : (
+                formatTimeAgo(post.created_at)
+              )}
             </div>
 
-            {isOwner && onDelete && (
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={handleDelete}
-                className="p-1 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
-              >
-                <Trash2 className="w-4 h-4 text-red-500" />
-              </motion.button>
+            {(() => {
+              const timeLeft = getTimeUntilExpiration();
+              if (!timeLeft) return null;
+              const isExpiringSoon = parseInt(timeLeft) < 120;
+              return (
+                <div className={`text-xs font-medium ${
+                  isExpiringSoon
+                    ? "text-red-600 dark:text-red-400"
+                    : "text-gray-400 dark:text-gray-500"
+                }`}>
+                  {timeLeft}
+                </div>
+              );
+            })()}
+
+            {isOwner && (
+              <div className="flex items-center gap-1">
+                {!isArchived && (
+                  <motion.button
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                    onClick={handleBump}
+                    disabled={isBumping}
+                    className="p-1 rounded-lg hover:bg-amber-50 dark:hover:bg-amber-900/20 transition-colors disabled:opacity-50 group relative"
+                  >
+                    <RotateCcw className="w-4 h-4 text-amber-500" />
+                    <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-gray-900 dark:bg-gray-700 text-white text-xs rounded px-2 py-1 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
+                      Refresh to add 1 more day
+                    </div>
+                  </motion.button>
+                )}
+
+                {!isArchived && (
+                  <motion.button
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                    onClick={() => setShowEditModal(true)}
+                    className="p-1 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors group relative"
+                  >
+                    <Edit2 className="w-4 h-4 text-blue-500" />
+                    <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-gray-900 dark:bg-gray-700 text-white text-xs rounded px-2 py-1 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
+                      Edit post
+                    </div>
+                  </motion.button>
+                )}
+
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={isArchived ? handleUnarchive : handleArchive}
+                  disabled={isArchiving}
+                  className="p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors disabled:opacity-50 group relative"
+                >
+                  <Archive className={`w-4 h-4 ${
+                    isArchived
+                      ? "text-green-600 dark:text-green-400"
+                      : "text-gray-600 dark:text-gray-400"
+                  }`} />
+                  <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-gray-900 dark:bg-gray-700 text-white text-xs rounded px-2 py-1 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
+                    {isArchived ? "Restore to feed" : "Hide from feed"}
+                  </div>
+                </motion.button>
+
+                {onDelete && (
+                  <motion.button
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                    onClick={handleDelete}
+                    className="p-1 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors group relative"
+                  >
+                    <Trash2 className="w-4 h-4 text-red-500" />
+                    <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-gray-900 dark:bg-gray-700 text-white text-xs rounded px-2 py-1 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
+                      Delete permanently
+                    </div>
+                  </motion.button>
+                )}
+              </div>
             )}
           </div>
         </div>
@@ -304,6 +459,14 @@ export function PostCard({ post, distance, onDelete }: PostCardProps) {
           </button>
         </div>
       </motion.div>
+
+      {/* Edit Modal */}
+      <EditPostModal
+        isOpen={showEditModal}
+        onClose={() => setShowEditModal(false)}
+        post={post}
+        onSave={handleEditPost}
+      />
 
       {/* Comments Modal */}
       <Modal
