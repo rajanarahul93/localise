@@ -1,6 +1,20 @@
 import { supabase } from "./supabase";
 import type { Comment } from "../types";
 
+export async function getCommentCount(postId: string): Promise<number> {
+  const { data, error } = await supabase
+    .from("comments")
+    .select("id", { count: "exact", head: true })
+    .eq("post_id", postId);
+
+  if (error) {
+    console.error("Error fetching comment count:", error);
+    return 0;
+  }
+
+  return data?.length || 0;
+}
+
 export async function fetchComments(postId: string): Promise<Comment[]> {
   const { data, error } = await supabase
     .from("comments")
@@ -13,32 +27,32 @@ export async function fetchComments(postId: string): Promise<Comment[]> {
     throw error;
   }
 
-  return data || [];
-}
+  const comments = data || [];
 
-async function uploadCommentAttachment(
-  file: File,
-  commentId: string
-): Promise<string> {
-  const ext = file.name.split(".").pop();
-  const fileName = `${commentId}/${Date.now()}.${ext}`;
+  const { data: reactionCounts, error: reactionError } = await supabase
+    .from("reactions")
+    .select("comment_id, reaction_type")
+    .in("comment_id", comments.map((c) => c.id));
 
-  const { data, error } = await supabase.storage
-    .from("comment-attachments")
-    .upload(fileName, file);
+  if (reactionError) {
+    console.warn("Error fetching reaction counts:", reactionError);
+  } else {
+    const countMap = new Map<string, number>();
+    (reactionCounts || []).forEach(({ comment_id }) => {
+      countMap.set(comment_id, (countMap.get(comment_id) || 0) + 1);
+    });
 
-  if (error) {
-    console.error("Error uploading comment file:", error);
-    throw new Error(`Failed to upload "${file.name}": ${error.message}`);
+    comments.forEach((comment) => {
+      comment.reaction_count = countMap.get(comment.id) || 0;
+    });
   }
 
-  return data.path;
+  return comments;
 }
 
 export async function addComment(
   postId: string,
-  content: string,
-  files?: File[]
+  content: string
 ): Promise<Comment> {
   const { data, error } = await supabase
     .from("comments")
@@ -46,7 +60,6 @@ export async function addComment(
       {
         post_id: postId,
         content: content.trim(),
-        attachments: [],
       },
     ])
     .select()
@@ -55,40 +68,6 @@ export async function addComment(
   if (error) {
     console.error("Error adding comment:", error);
     throw error;
-  }
-
-  if (files && files.length > 0) {
-    const attachmentPaths: string[] = [];
-    try {
-      for (const file of files) {
-        const path = await uploadCommentAttachment(file, data.id);
-        attachmentPaths.push(path);
-      }
-
-      const { data: updatedComment, error: updateError } = await supabase
-        .from("comments")
-        .update({ attachments: attachmentPaths })
-        .eq("id", data.id)
-        .select()
-        .single();
-
-      if (updateError) throw updateError;
-      return updatedComment;
-    } catch (error) {
-      // Cleanup uploaded files if comment update fails
-      if (attachmentPaths.length > 0) {
-        try {
-          await supabase.storage
-            .from("comment-attachments")
-            .remove(attachmentPaths);
-        } catch (cleanupError) {
-          console.error("Cleanup error:", cleanupError);
-        }
-      }
-      // Delete comment
-      await supabase.from("comments").delete().eq("id", data.id);
-      throw error;
-    }
   }
 
   return data;

@@ -1,12 +1,14 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { Clock, MapPin, MessageCircle, Trash2, FileText, Download, Edit2, RotateCcw, Archive } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { Modal } from "./ui/Modal";
 import { CommentsList } from "./CommentsList";
 import { EditPostModal } from "./EditPostModal";
+import { ReactionButton } from "./ReactionButton";
 import { supabase } from "../lib/supabase";
 import { deletePostAttachments, queueAttachmentCleanup, updatePost, bumpPost, archivePost, unarchivePost } from "../lib/posts";
+import { getCommentCount } from "../lib/comments";
 import type { Post } from "../types";
 import toast from "react-hot-toast";
 
@@ -61,6 +63,19 @@ export function PostCard({ post: initialPost, distance, onDelete, onArchiveChang
   const [isBumping, setIsBumping] = useState(false);
   const [isArchiving, setIsArchiving] = useState(false);
   const isOwner = user?.id === post.user_id;
+
+  useEffect(() => {
+    loadCommentCount();
+  }, [post.id]);
+
+  const loadCommentCount = async () => {
+    try {
+      const count = await getCommentCount(post.id);
+      setCommentCount(count);
+    } catch (error) {
+      console.error("Error loading comment count:", error);
+    }
+  };
 
   const handleEditPost = async (updates: { title: string; description: string }) => {
     try {
@@ -440,7 +455,7 @@ export function PostCard({ post: initialPost, distance, onDelete, onArchiveChang
           </div>
         )}
 
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
           {distance !== undefined && (
             <div className="flex items-center text-gray-500 dark:text-gray-400 text-sm">
               <MapPin className="w-4 h-4 mr-1" />
@@ -448,15 +463,16 @@ export function PostCard({ post: initialPost, distance, onDelete, onArchiveChang
             </div>
           )}
 
-          <button
-            onClick={() => setShowComments(true)}
-            className="flex items-center text-primary-600 dark:text-primary-400 hover:text-primary-700 dark:hover:text-primary-300 transition-colors"
-          >
-            <MessageCircle className="w-4 h-4 mr-1" />
-            <span className="text-sm font-medium">
+          <div className="flex items-center gap-2">
+            <ReactionButton targetId={post.id} targetType="post" />
+            <button
+              onClick={() => setShowComments(true)}
+              className="flex items-center text-primary-600 dark:text-primary-400 hover:text-primary-700 dark:hover:text-primary-300 transition-colors px-3 py-1.5 rounded-lg hover:bg-primary-50 dark:hover:bg-primary-900/20 text-sm font-medium"
+            >
+              <MessageCircle className="w-4 h-4 mr-1" />
               {commentCount} {commentCount === 1 ? "Comment" : "Comments"}
-            </span>
-          </button>
+            </button>
+          </div>
         </div>
       </motion.div>
 
