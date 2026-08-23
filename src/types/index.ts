@@ -13,6 +13,8 @@ export interface Post {
   is_archived: boolean;
   bump_count: number;
   last_bumped_at?: string;
+  reaction_count?: number;
+  report_count?: number;
 }
 
 export interface Comment {
@@ -23,6 +25,27 @@ export interface Comment {
   created_at: string;
   updated_at?: string;
   attachments?: string[];
+  reaction_count?: number;
+  report_count?: number;
+}
+
+export type ReactionType = "👍" | "😍" | "💯" | "⚠️";
+
+export interface Reaction {
+  id: string;
+  post_id?: string;
+  comment_id?: string;
+  user_id: string;
+  reaction_type: ReactionType;
+  created_at: string;
+}
+
+export interface Report {
+  id: string;
+  post_id?: string;
+  comment_id?: string;
+  user_id: string;
+  created_at: string;
 }
 
 export interface Location {
